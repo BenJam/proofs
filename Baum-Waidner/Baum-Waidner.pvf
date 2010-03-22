@@ -1,0 +1,1312 @@
+(************************************************************
+
+Protocol: Baum-Waidner Multi-Party Contract Signing (n=2 t=3)
+Version:  1
+Created:  12/08/07	
+Last Updated: 05/09/07
+*************************************************************)
+
+(************************************************************
+Let
+-------------------------------------------------------------
+Cx = (terms,contract,H(terms,contract)) for process X
+
+Main Protocol
+-------------------------------------------------------------
+Round 1
+.............................................................
+A->B: Sa(Ca,1,prev_rnd_ok) (A saves as M11)
+B->A: Sb(Cb,1,prev_rnd_ok) (B saves as M12)
+X11=M11
+X12=M12
+
+Round 2
+.............................................................
+A->B: Sa(M11,2,vec_ok),Sa(Ca,2,prev_rnd_ok) (A saves as M21)
+B->A: Sb(M12,2,vec_ok),Sb(Cb,2,prev_rnd_ok) (B saves as M22)
+X21=Sb(M12,2,vec_ok)
+X22=Sa(M11,2,vec_ok)
+
+Round 3
+.............................................................
+A->B: Sa(M21,3,vec_ok),Sa(Ca,3,prev_rnd_ok) (A saves as M31)
+B->A: Sb(M22,3,vec_ok),Sb(Cb,3,prev_rnd_ok) (B saves as M32)
+A saves X31=Sb(M22,3,vec_ok) state=signed
+B saves X32=Sa(M21,3,vec_ok) state=signed
+
+Abort Protocol
+-------------------------------------------------------------
+X->T: Cx,X,Sx(Cx,reject)
+T->X: Fres,(r,X),St(Cx,r,X,Fsigned) iff final result is sign (T2a)
+T->X: Cx,r,X,St(Cx,r,X,Fabt) iff final result is aborted (T2b)
+T->X: Cx,r,X,St(Cx,r,X,Fabt) iff guessed result is abort (T3)
+T->X: 0 else (T4)
+
+Resolve Protocol
+-------------------------------------------------------------
+X->T: Cx,r,X,Sx(X(r-1,x),resolve),X(r-1,x),M(r-2,x)
+T->X: Fres,(r,X),St(Cx,r,X,Fsigned) iff final result is sign (T2a)
+T->X: Cx,r,X,St(Cx,r,X,Fabt) iff final result is aborted (T2b)
+T->X: Cx,r,X,St(Cx,r,X,Fabt) iff guessed result is abort (T3)
+T->X: 0 else (T4)
+
+*************************************************************)
+
+param attacker=active. (*attacker model*)
+param traceDisplay=long.(*provrif attack output*)
+param reconstructTrace=true. (*build a trace if query cannot be proven*)
+
+free ch.(*open communications channel*)
+private free rch. (*resilient communications channel*)
+
+free contract. (*contract text*)
+free terms. (*contract terms*)
+
+data zero/0.(*round indicators*) 
+data one/0.
+data two/0.
+data three/0.
+
+data true/0. (*boolean state handling flags*)
+data false/0.
+
+data Fprok/0. (*flag: previous round ok*)
+data Fvok/0. (*flag: vector ok*)
+data Frej/0. (*flag: reject*)
+data Fres/0. (*flag: resolve*)
+data Fsigned/0. (*flag: signed*)
+data Fabt/0. (*flag: aborted*)
+
+data null/0. (*null set element*)
+
+fun host/1. (*host identification*)
+fun pk/1. (*public key generation*)
+reduc getKey(host(x))=x. (*public key lookup*)
+
+fun H/1. (*secure hash function*)
+
+fun sign/2. (*digital signature*)
+reduc checkSign(sign(m,sk),pk(sk))=m. (*signature verification*)
+
+private free skA. (*process A private key*)
+private free skB. (*process B private key*)
+private free skT. (*process T private key*)
+
+query
+	(*BUGHUNT private key secrecy*)
+	attacker:skA;
+	attacker:skB;
+	attacker:skT;
+
+	(*BUGHUNT order of rounds*)
+	ev:round3(A)==>ev:round2(A);
+	ev:round2(A)==>ev:round1(A);
+	ev:round1(A)==>ev:begin(A);
+	ev:round3(B)==>ev:round2(B);
+	ev:round3(B)==>ev:round1(B);
+	ev:round1(B)==>ev:begin(B);
+	ev:round3(T)==>ev:round2(T)|ev:round1(T)|ev:begin(T);
+	ev:round2(T)==>ev:round1(T)|ev:begin(T);
+	ev:round1(T)==>ev:begin(T);
+
+	(*BUHUNT process' end*)
+	ev:end(A);
+	ev:end(B);
+	ev:end(T);
+
+	(*BUGHUNT raised exceptions*)
+	ev:receivedResolve(A)==>ev:raisedException(A);
+	ev:receivedAbort(B)==>ev:raisedException(A);
+	ev:receivedResolve(B)==>ev:raisedException(B);
+	ev:receivedAbort(B)==>ev:raisedException(B);
+
+	(*honest abort shall not be overturned*)
+	ev:overTurned(A)==>ev:leftRound1(A);
+	ev:overTurned(B)==>ev:leftRound1(B);
+
+	(*honest signer released signature resolve granted*)
+	ev:receivedResolve(A)==>ev:leftRound1(A);
+	ev:receivedResolve(B)==>ev:leftRound1(B).
+
+(**************************************************************************************)
+
+(*Process A 
+	State:
+		raisedException=false *)
+let processA=
+	event begin(A);
+	let Ca=sign((contract,terms,H((contract,terms))),skA) in
+	let MA=null in
+	let XA=null in
+	processARound1. (*| processAReject*)
+
+(*Process A Round 1 
+	State:
+		raisedException=false *)
+let processARound1=
+	event round1(A);
+	let ra=one in
+	out(ch,sign((Ca,one,Fprok),skA))|in(ch,m1);
+	let (Cb1,=one,=Fprok)=checkSign(m1,getKey(B)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Cb1,getKey(B)) in(
+			let MA=m1  in
+			let XA=MA in
+			processARound2
+		)
+		else
+			event raisedException(A);
+			processAResolve (*resolve without evidence*)
+	)
+	else
+		event raisedException(A);
+		processAResolve. (*resolve without evidence*) 
+
+(*Process A Round 2 
+	State:
+		raisedException=false *)
+let processARound2=
+	event leftRound1(A);
+	event round2(A);
+	let ra=two in
+	out(ch,(sign((M11,two,Fvok),skA),sign((Ca,two,Fprok),skA)))|in(ch,(m21,m22));
+	let (Cb2,=two,=Fprok)=checkSign(m22,getKey(B)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Cb2,getKey(B)) in(
+			let MA=m22 in
+			let XA=m21 in
+			processARound3
+		)
+		else
+			event raisedException(A);
+			processAResolve (*resolve*)
+	)
+	else
+		event raisedException(A);
+		processAResolve. (*resolve*)
+
+(*Process A Round 3 
+	State:
+		raisedException=false *)
+let processARound3=
+	event round3(A);
+	let ra=three in
+	out(ch,(sign((M21,three,Fvok),skA),sign((Ca,three,Fprok),skA)))|in(ch,(m31,m32));
+	let (Cb3,=three,=Fprok)=checkSign(m32,getKey(B)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Cb3,getKey(B)) in(
+			let MA=m32 in
+			let XA=m31 in
+			let contractFromB=M31 in
+			event signed(A,m32);
+			event end(A);
+			0
+		)
+		else
+			event raisedException(A);
+			processAResolve (*resolve*)
+	)
+	else
+		event raisedException(A);
+		processAResolve. (*resolve*)
+
+(*Process A Reject r=
+	State:
+		raisedException=true *)
+let processAReject=
+	out(rch,(Ca,A,sign((Ca,Frej),skA)));
+	event receivedReject(A);
+	0.
+
+(* Process A Resolve r=
+	State:
+		raisedException=true *)
+let processAResolve=
+	event reqResolve(A);
+	out(rch,(Ca,ra,sign((XA,Fres),skA),XA,A));
+	in(rch,message);
+	(*T>B: Cx,r,X,St(Cx,r,X,Fabt)*) 
+	let (Cx,rx,X,Evx)=message in( (*receive an abort token*)
+		let (=Cx,=rx,=X,=Fabt)=checkSign(Evx,getKey(T)) in(
+			event receivedAbort(A);
+			event end(A);
+			0
+		)
+		else (*Bad signature*)
+			event error(A);
+			event end(A);
+			0
+	)
+	(*T>B:Fres,r,X,St(Cx,r,X,Fsigned) *)
+	else let (=Fres,rx,X,Evx)=message in( (*receive a signature*)
+		let (=contract,=rx,=X,=Fsigned)=checkSign(Evx,getKey(T)) in(
+			event receivedResolve(A);
+			event end(A);
+			0
+		)
+	)
+	else (*reply was not in correct format*)
+		event error(A);
+		event end(A);
+		0.
+
+
+(**************************************************************************************)
+
+(*Process B 
+	State:
+		raisedException=false *)
+let processB=
+	event begin(B);
+	event hasNotReleasedSig(B);
+	let Cb=sign((contract,terms,H((contract,terms))),skB) in
+	let MB=null in
+	let XB=null in
+	processBRound1.(*|processBReject*)
+
+(*Process B Round 1 
+	State:
+		raisedException=false *)
+let processBRound1=
+	event round1(B);
+	let rb=one in
+	out(ch,sign((Cb,one,Fprok),skB))|in(ch,m1);
+	let (Ca1,=one,=Fprok)=checkSign(m1,getKey(A)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Ca1,getKey(A)) in (
+			let MB=m1  in
+			let XB=MB in
+			processBRound2
+		)
+		else
+			event raisedException(B);
+			processBResolve (*resolve without evidence*)
+	)
+	else
+		event raisedException(B);
+		processBResolve. (*resolve without evidence*)
+
+(*Process B Round 2 
+	State:
+		raisedException=false *)
+let processBRound2=
+	event leftRound1(B);
+	event round2(B);
+	let rb=two in
+	out(ch,(sign((M12,two,Fvok),skB),sign((Cb,two,Fprok),skB)))|in(ch,(m21,m22));
+	let (Ca2,=two,=Fprok)=checkSign(m22,getKey(A)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Ca2,getKey(A)) in(
+			let MB=m22 in
+			let XB=m21 in
+			processBRound3
+		)
+		else
+			event raisedException(B);
+			processBResolve
+	)
+	else
+		event raisedException(B);
+		processBResolve.
+
+(*Process B Round 3 
+	State: 
+		raisedException=false *)
+let processBRound3=
+	event round3(B);
+	let rb=three in
+	out(ch,(sign((M22,three,Fvok),skB),sign((Cb,three,Fprok),skB)))|in(ch,(m31,m32));
+	let (Ca3,=three,=Fprok)=checkSign(m32,getKey(A)) in(
+		let (=contract,=terms,=H((contract,terms)))=checkSign(Ca3,getKey(A)) in(
+			let MB=m32 in
+			let XB=m31 in
+			let contractFromA=M32 in
+			event signed(B,m32);
+			event end(B);
+			0
+		)
+		else
+			event raisedException(B);
+			processBResolve
+	)
+	else
+		event raisedException(B);
+		processBResolve.
+
+(*Process B Reject r=
+	State:
+		raisedException=true *)
+let processBReject=
+	event reqReject(B);
+	out(rch,(Cb,B,sign((Cb,Frej),skB)));
+	0.
+
+(*Process B Resolve r=
+	State:
+		raisedException=true *)
+let processBResolve=
+	event reqResolve(B);
+	out(rch,(Cb,rb,sign((XB,Fres),skB),XB,B));
+	in(rch,message);
+	(*T>B: Cx,r,X,St(Cx,r,X,Fabt)*) 
+	let (Cx,rx,X,Evx)=message in( (*receive an abort token*)
+		let (=Cx,=rx,=X,=Fabt)=checkSign(Evx,getKey(T)) in(
+			event receivedAbort(B);
+			event end(B);
+			0
+		)
+		else (*Bad signature*)
+			event error(B);
+			event end(B);
+			0
+	)
+	(*Fres,three,B,sign((contract,three,B,Fsigned),skT)*)
+	(*T>B:Fres,r,X,St(Cx,r,X,Fsigned) *)
+	else let (=Fres,rx,X,Evx)=message in( (*receive a signature*)
+		let (=contract,=rx,=X,=Fsigned)=checkSign(Evx,getKey(T)) in(
+			event receivedResolve(B);
+			event end(B);
+			0
+		)
+	)
+	else (*reply was not in correct format*)
+		event error(B);
+		event end(B);
+		0.
+
+(**************************************************************************************)
+	
+(*Process T0aR0-------------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=0
+		firstReq={}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={}
+		maybeHonestUnanswered{}*)
+let processT0aR0=
+	event begin(T);
+	in(rch,requestOne);
+	(*I->T: Ci,I,Si(Ci,reject)*)
+	let (Ci,I,Evi)=requestOne in(	
+		let (=Ci,=Frej)=checkSign(Evi,getKey(I))in(
+			let firstReq=(Ci,I,Ev) in
+			let maybeHonestRejected=I in
+			event round1(T);
+			processT0aR1Rej (*Reject Req R1*)
+		)
+		(*Invalid signature*)
+		else
+			0
+	)
+	(*I->T: Ci,r,Si(X(r-1,i),resolve), X(r-1,i),I*)
+	else let (Ci,ri,Evi,Xir,I)=requestOne in(	
+		let (=Xir,=Fres)=checkSign(Evi,getKey(I))in(
+			let firstReq=(Ci,ri,Evi,Xir,I) in
+			let maybeHonestUnanswered=I in	
+			if ri=one then(
+				event round1(T);
+				processT3R1Res (*Resolve Req R1*)
+			)
+			else if ri=two then(
+				event round2(T);
+				processT2aR2Res (*Resolve Req R2*)
+			)
+			else if ri=three then(
+				event round3(T);
+				processT2aR3Res (*Resolve Req R3*)
+			)
+			else(
+				event error(T);
+				0
+			)
+		)
+		(*Invalid signature*)
+		else
+			0
+	)
+	(*Invalid request*)
+	else
+		0.
+
+(*Process T0aR1Rej----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=1
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0aR1Rej=
+	in(rch,requestTwo);
+	(*I->T: Cj,J,Sj(Cj,reject)*)
+	let (Cj,J,Evj)=requestTwo in(
+		if maybeHonestRejected=J then(	
+			0 (*Duplicate request*)
+		)
+		else(
+			let (=Cj,=Frej)=checkSign(Evj,getKey(J))in(
+				let secondReq=(Cj,J,Evj) in
+				let maybeHonestRejected=(I,J) in
+				processT0aR1RejRej (*Reject Req R=1*)
+			)
+			else
+				0 (*Invalid signature*)
+		)
+	)
+	(*I->T: Cj,r,Sj(X(r-1,j),resolve), X(r-1,j),J*)
+	else let (Cj,rj,Evj,Xrj,J)=requestTwo in(
+		if maybeHonestRejected=J then(
+			0
+		)
+		else(
+			let (=Xrj,=Fres)=checkSign(Evj,getKey(J))in(
+				let secondReq=(Cj,rj,Evj,Xrj,J) in
+				let maybeHonestUnanswered=J in	
+				if rj=zero then(
+					event error(T);
+					0 (*r=0 should not occur on input*)
+				)
+				else if rj=one then(
+					processT2bR1RejRes
+				)
+				else if rj=two then(
+					event round2(T);
+					processT0bR2RejRes
+				)
+				else if rj=three then(
+					event round3(T);
+					processT0bR3RejRes
+				)
+				else
+					0
+			)
+			(*Invalid signature*)
+			else
+				0
+		)
+	)
+	(*Invalid request*)
+	else
+		0.
+
+(*Process T0aR1RejRej-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=1
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={(Cj,J,Sj(Cj,reject))}
+		dishonestContact={}
+		maybeHonestRejected={I,J}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0aR1RejRej=
+	event end(T);
+	0.
+
+(*ProcessT0aR1Res----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=abort
+		currentContextRound=1
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{}*)
+let processT0aR1Res=
+	in(rch,requestTwo);
+	(*I->T: Cj,J,Sj(Cj,reject)*)
+	let (Cj,J,Evj)=requestTwo in(
+		if maybeHonestAborted=J then(
+			0 (*duplicate request*)
+		)
+		else(
+			let (=Cj,=Frej)=checkSign(Evj,getKey(J)) in(
+				let maybeHonestUnanswered=J in
+				let secondReq=(Cj,J,Evj) in
+				processT2bR1ResRej
+			)
+			else
+				0 (*invalid evidence*)
+		)
+	)
+	(*I->T: Cj,r,Sj(X(r-1,j),resolve), X(r-1,j),J*)
+	else let (Cj,rj,Evj,Xrj,J)=requestTwo in(
+		if maybeHonestAborted=J then(
+			0
+		)
+		else(
+			let (=Xrj,=Fres)=checkSign(Evj,getKey(J))in(
+			let secondReq=(Cj,rj,Evj,Xrj,J) in
+			if rj=one then(
+				processT2bR1ResRes
+			)
+			else if rj=two then
+				let maybeHonestUnanswered=J in
+				event round2(T);
+				processT0bR2ResRes
+			)
+			else(
+				let currentContextRound=three in
+				event roundThree(T);
+				processT0bR3ResRes
+			)
+		)
+	)
+	(*Invalid request*)
+	else
+		0.
+
+(*Process T0aR2Res----------------------------------
+	State:
+		signed=true
+		isFinalResult=true
+		theResult=resolve,2,I,sign((Ci,2,I,signed))
+		currentContextRound=2
+		firstReq={Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0aR2Res=
+	in(rch,requestTwo);
+	(*I->T: Cj,J,Sj(Cj,reject)*)
+	let (Cj,J,Evj)=requestTwo in(
+		let (=Cj,=Frej)=checkSign(Evj,getKey(J)) in(
+			let maybeHonestUnanswered=J in
+			let secondReq=(Cj,J,Evj) in
+			processT0bR2ResRej
+		)
+		else
+			0 (*invalid evidence*)
+	)
+	(*I->T: Cj,r,Sj(X(r-1,j),resolve), X(r-1,j),J*)
+	else let (Cj,rj,Evj,Xrj,J)=requestTwo in(
+		let (=Xrj,=Fres)=checkSign(Evj,getKey(J))in(
+		let secondReq=(Cj,rj,Evj,Xrj,J) in
+		if rj=one then(
+			event round2(T);
+			processT0bR2ResRes
+		)
+		else if rj=two then
+			let maybeHonestUnanswered=J in
+			processT0bR2ResRes
+		)
+		else(
+			let currentContextRound=three in
+			event roundThree(T);
+			processT0bR3ResRes
+		)
+	)
+	(*Invalid request*)
+	else
+		0.
+
+
+(*Process T0aR3Res----------------------------------
+	State:
+		signed=true
+		isFinalResult=true
+		theResult=resolve,3,I,sign((Ci,3,I,signed))
+		currentContextRound=3
+		firstReq={Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0aR3Res=
+	in(rch,requestTwo);
+	(*I->T: Cj,J,Sj(Cj,reject)*)
+	let (Cj,J,Evj)=requestTwo in(
+		let (=Cj,=Frej)=checkSign(Evj,getKey(J)) in(
+			let secondReq=(Cj,J,Evj) in
+			let maybeHonestUnanswered=J in
+			processT0bR3ResRej
+		)
+		else
+			0 (*invalid evidence*)
+	)
+	(*I->T: Cj,r,Sj(X(r-1,j),resolve), X(r-1,j),J*)
+	else let (Cj,rj,Evj,Xrj,J)=requestTwo in(
+		let (=Xrj,=Fres)=checkSign(Evj,getKey(J))in
+		let secondReq=(Cj,rj,Evj,Xrj,J) in
+		let maybeHonestUnanswered=J in
+		processT0bR3ResRes
+	)
+	(*Invalid request*)
+	else
+		0.
+	
+(*Process T0bR2RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=2
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT0bR2RejRes=
+	if J=A then(	
+		let (evCb,=one,=Fprok)=checkSign(Xrj,getKey(B)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+				let dishonestContact=B in
+				processT2aR2RejRes
+			)
+		)
+		else
+			0 (*invalid evidence reject holds*)
+	)
+	else(
+		let (evCa,=one,=Fprok)=checkSign(Xrj,getKey(A)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+				let dishonestContact=A in
+				processT2aR2RejRes
+			)
+		)
+		else
+			0 (*Invalid evidence reject holds*)
+	).
+
+
+(*Process T0bR3RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=3
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT0bR3RejRes=
+	if J=A then(	
+		let (evCb,=two,=Fprok)=checkSign(Xrj,getKey(B)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+				let dishonestContact=B in
+				processT2aR3RejRes
+			)
+		)
+		else
+			0 (*invalid evidence reject holds*)
+	)
+	else(
+		let (evCa,=two,=Fprok)=checkSign(Xrj,getKey(A)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+				let dishonestContact=A in
+				processT2aR3RejRes
+			)
+		)
+		else
+			0 (*Invalid evidence reject holds*)
+	).
+
+(*Process T0bR2ResRej-------------------------------
+	State:
+		signed=true
+		isFinalResult=true
+		theResult=resolve,2,I,sign((Ci,2,I,signed))
+		currentContextRound=2
+		firstReq={Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I}
+		secondReq={Cj,J,Sj(Cj,reject}
+		dishonestContact={}
+		maybeHonestRejected={J}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0bR2ResRej=
+	let dishonestContact=J in
+	let maybeHonestRejected=null in
+	0.
+
+(*Process T0bR2ResRes-------------------------------
+	State:
+		signed=true
+		isFinalResult=true
+		theResult=resolve,2,I,sign((Ci,2,I,signed))
+		currentContextRound=2
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)} OR
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*)
+let processT0bR2ResRes=
+	if J=A then(
+		if ri=one then( (*Evidence was not provided on initial resolve*)
+			let (evCb,=two,=Fpok)=checkSign(Xjr,getKey(B)) in(
+				let(=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+					processT1R2ResRes
+				)
+			)
+		)
+		else(
+			let (evCb,=two,=Fprok)=checkSign(Xjr,getKey(B)) in(
+				let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+					processT1R2ResRes
+				)
+			)
+			else let (evCb,=three,=Fprok)=checkSign(Xjr,getKey(B)) in(
+				let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+					event round3(T);
+					processT1R3ResRes
+				)
+			)
+			else	
+				0 (*invalid evidence*)
+		)
+	)
+	else(
+		if ri=one then( (*Evidence was not provided on initial resolve*)
+			let (evCa,=two,=Fpok)=checkSign(Xjr,getKey(A)) in(
+				let(=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+					processT1R2ResRes
+				)
+			)
+		)
+		else(
+			let (evCa,=two,=Fprok)=checkSign(Xjr,getKey(A)) in(
+				let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+					processT1R2ResRes
+				)
+			)
+			else let (evCa,=three,=Fprok)=checkSign(Xjr,getKey(A)) in(
+				let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+					event round3(T);
+					processT1R3ResRes
+				)
+			)
+			else
+				0 (*invalid evidence*)
+		)
+	).
+
+(*Process T0bR3ResRej-------------------------------
+	State:
+		signed=true
+		isFinalResult=true
+		theResult=resolve,3,I,sign((Ci,3,I,signed))
+		currentContextRound=3
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)}
+		secondReq={(Cj,J,Sj(Cj,reject)}
+		dishonestContact={}
+		maybeHonestRejected={J}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{}*)
+let processT0bR3ResRej=
+	let dishonestContact=J in
+	let maybehonestRejected=null in
+	0.
+
+(*Process T0bR3ResRes--------------------------------
+	State:
+		signed=true OR false
+		isFinalResult=true OR false
+		theResult=resolve,3,I,sign((Ci,3,I,signed)) OR abortR1 guess
+		currentContextRound=3
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)} OR
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*)
+let processT0bR3ResRes=
+	if J=A then(
+		let (evCb,round,=Fpok)=checkSign(Xjr,getKey(B)) in(
+			let(=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+				processT1R3ResRes
+			)
+		)
+		else
+			0
+	)
+	else(
+		let (evCb,round,=Fpok)=checkSign(Xjr,getKey(A)) in(
+			let(=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(A)) in(
+				processT1R3ResRes
+			)
+		)
+		else
+			0
+	).
+
+(*Process T1R2ResRes-------------------------------
+	State:
+		signed=true OR flase
+		isFinalResult=true OR false
+		theResult=resolve,2,I,sign((Ci,2,I,signed)) OR abort guess
+		currentContextRound=2
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)} OR R1 resolve
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={}  OR I
+		maybeHonestUnanswered{J}*)
+let processT1R2ResRes=
+	if ri=one then(
+		processT2aR2ResRes
+	)
+	else
+		let maybeHonestUnanswered=null in
+		out(rch,theResult);
+		0.
+
+(*Process T1R3ResRes------------------------------
+	State:
+		signed=true OR false
+		isFinalResult=true OR flase
+		theResult=resolve,3,I,sign((Ci,3,I,signed)) OR abort guess
+		currentContextRound=3
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)} OR R1 resolve
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} OR I
+		maybeHonestUnanswered{J}*)
+let processT1R3ResRes=
+	if ri=one then(
+		processT2aR3ResRes
+	)
+	else(
+		let maybeHonestUnanswered=null in
+		out(rch,theResult);
+		0
+	).
+
+(*Process T2aR2Res----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=2
+		firstReq={Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{I}*)
+let processT2aR2Res=
+	if I=A then(
+		let (evCb,=one,=Fprok)=checkSign(Xir,getKey(B)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+				let theResult=(Fres,contract,two,A,sign((contract,two,A,Fsigned),skT)) in
+				out(rch,theResult);
+				event sentSigned(A);
+				event isFinal(T);
+				processT0aR2Res
+			)	
+			else
+				0 (*contract is not correctly formed*)
+		)
+		else
+			0 (*evidence is not correctly formed*)
+	)
+	else(
+		let (evCa,=one,=Fprok)=checkSign(Xir,getKey(A)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(
+				let theResult=(Fres,contract,two,B,sign((contract,two,B,Fsigned),skT)) in
+				out(rch,theResult);
+				event sentSigned(B);
+				event isFinal(T);
+				processT0aR2Res
+			)
+			else
+				0 (*contract is not correctly formed*)
+		)
+		else
+			0 (*evidence is not correctly formed*)
+	).
+
+(*Process T2aR2ResRes-------------------------------
+	State:
+		signed=true OR flase
+		isFinalResult=true OR false
+		theResult=resolve,2,I,sign((Ci,2,I,signed)) OR abort guess
+		currentContextRound=2
+		firstReq={(Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I)} OR R1 resolve
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={}  OR I
+		maybeHonestUnanswered{J}*)
+let processT2aR2ResRes=
+	if J=A then(
+		let theResult=(Fres,two,A,sign((contract,two,A,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(A);
+		event overTurned(B);
+		event isFinal(T);
+		0
+	)
+	else(
+		let theResult=(Fres,two,B,sign((contract,two,B,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(B);
+		event overTurned(A);
+		event isFinal(T);
+		0
+	).
+
+(*Process T2aR3Res----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=3
+		firstReq={Ci,r,Si(X(r-1,i),resolve),X(r-1,i),I}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{I}*)
+let processT2aR3Res=
+	if I=A then(
+		let (evCb,=two,=Fprok)=checkSign(Xir,getKey(B)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCb,getKey(B)) in(
+				let theResult=(Fres,contract,three,A,sign((contract,three,A,Fsigned),skT)) in
+				out(rch,theResult);
+				event sentSigned(A);
+				event isFinal(T);
+				processT0aR3Res
+			)	
+			else
+				0 (*contract is not correctly formed*)
+		)
+		else
+			0 (*evidence is not correctly formed*)
+	)
+	else(
+		let (evCa,=two,=Fprok)=checkSign(Xir,getKey(A)) in(
+			let (=contract,=terms,=H((contract,terms)))=checkSign(evCa,getKey(A)) in(	
+				let theResult=(Fres,contract,three,A,sign((contract,three,A,Fsigned),skT)) in
+				out(rch,theResult);
+				event sentSigned(B);
+				event isFinal(T);
+				processT0aR3Res
+			)
+			else
+				0 (*contract is not correctly formed*)
+		)
+		else
+			0 (*evidence is not correctly formed*)
+	).
+
+(*ProcessT2aR3ResRes----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=abort
+		currentContextRound=1
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={Cj,r,Sj(Xr-1j,resolve),Xr-1j,J}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*)
+let processT2aR3ResRes=
+	if J=A then(
+		let theResult=(Fres,three,A,sign((contract,three,A,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(A);
+		event overTurned(B);
+		event isFinal(T);
+		0
+	)
+	else(
+		let theResult=(Fres,three,B,sign((contract,three,B,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(B);
+		event overTurned(A);
+		event isFinal(T);
+		0
+	).
+
+(*Process T2aR2RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=2
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={I}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT2aR2RejRes=
+	if J=A then(
+		let theResult=(Fres,two,A,sign((contract,two,A,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(A);
+		event overTurned(B);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,two,B,sign((contract,two,B,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(B);
+		event overTurned(A);
+		event isFinal(T);
+		0
+	).
+
+
+(*Process T2aR3RejRes---------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=3
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={(Cj,r,Sj(X(r-1,j),resolve),X(r-1,j),J)}
+		dishonestContact={I}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT2aR3RejRes=
+	if J=A then(
+		let theResult=(Fres,three,A,sign((contract,three,A,Fsigned),skT)) in
+		out(rch,theResult);
+		event sign(A);
+		event overTurned(B);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,three,B,sign((contract,three,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sign(B);
+		event overTurned(A);
+		event isFinal(T);
+		0
+	).
+
+(*Process T2bR1RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=1
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={Cj,r,Sj(null,resolve),null,J}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT2bR1RejRes=
+	if J=A then(
+		let theResult=(Fres,one,A,sign((contract,one,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,one,B,sign((contract,one,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);
+		event isFinal(T);
+		0
+	).
+
+(*Process T2bR2RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=2
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={Cj,r,Sj(null,resolve),null,J}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT2bR2RejRes=
+	if J=A then(
+		let theResult=(Fres,two,A,sign((contract,two,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,two,B,sign((contract,two,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);
+		event isFinal(T);
+		0
+	).
+
+(*Process T2bR3RejRes-------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=3
+		firstReq={(Ci,I,Si(Ci,reject))}
+		secondReq={Cj,r,Sj(null,resolve),null,J}
+		dishonestContact={}
+		maybeHonestRejected={I}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{J}*)
+let processT2bR3RejRes=
+	if J=A then(
+		let theResult=(Fres,three,A,sign((contract,three,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,three,B,sign((contract,three,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);
+		event isFinal(T);
+		0
+	).
+
+
+(*ProcessT2bR1ResRej----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=abort
+		currentContextRound=1
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={Cj,J,Sj(Cj,reject}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*) 
+let processT2bR1ResRej=
+	if J=A then(
+		let theResult=(contract,one,A,sign((contract,one,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(contract,one,B,sign((contract,one,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);
+		event isFinal(T);
+		0
+	).
+
+
+(*ProcessT2bR1ResRes----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=abort
+		currentContextRound=1
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={Cj,r,Sj(null,resolve),null,J}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*)
+let processT2bR1ResRes=
+	if J=A then(
+		let theResult=(Fres,one,A,sign((contract,one,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,one,A,sign((contract,one,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);
+		event isFinal(T);
+		0
+	).
+
+(*ProcessT2bR2ResRes----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=abort
+		currentContextRound=2
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={Cj,r,Sj(Xr-1j,resolve),Xr-1j,J}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={I} 
+		maybeHonestUnanswered{J}*)
+let processT2bR2ResRes=
+	if J=A then(
+		let theResult=(Fres,two,A,sign((contract,two,A,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(A);
+		event isFinal(T);
+		0
+	)	
+	else(	
+		let theResult=(Fres,two,B,sign((contract,two,B,Fabt),skT)) in
+		out(rch,theResult);
+		event sentAbort(B);		
+		event isFinal(T);
+		0
+	).
+
+
+(*Process T3R1Res----------------------------------
+	State:
+		signed=false
+		isFinalResult=false
+		theResult=null
+		currentContextRound=1
+		firstReq={Ci,r,Si(null,resolve),null,I}
+		secondReq={}
+		dishonestContact={}
+		maybeHonestRejected={}
+		maybeHonestAborted={} 
+		maybeHonestUnanswered{I}*)
+let processT3R1Res=
+	if I=A then(
+		let (=null,=Fres)=checkSign(Evi,getKey(B)) in(
+			let theResult=(contract,one,A,(contract,one,A,Fabt,skT)) in
+			out(rch,theResult); (*respond with abort guess*)
+			event sentAbort(A);
+			processT0aR1Res
+		)
+		else
+			0 (*invalid resolve token*)
+	)
+	else(
+		let (=null,Fres)=checkSign(Evi,getKey(A)) in(
+			let theResult=(contract,one,B,(contract,one,B,Fabt,skT)) in
+			out(rch,theResult);
+			event sentAbort(B);	
+			processT0aR1Res
+		)
+		else
+			0 (*invalid resolve token*)
+	).
+
+process
+	let pkA=pk(skA) in (*create public keys*)
+	let pkB=pk(skB) in
+	let pkT=pk(skT) in
+	let A=host(pkA) in (*bind public keys*)
+	let B=host(pkB) in
+	let T=host(pkT) in
+
+	processA|processB|processT0aR0

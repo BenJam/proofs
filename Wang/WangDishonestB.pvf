@@ -1,0 +1,325 @@
+(************************************************************
+
+Protocol: Wang Non-repudiation (A dishonest)
+Version: 0.1
+Created: 01/08/07	
+Last Updated: 
+*************************************************************)
+
+(************************************************************
+Let
+-------------------------------------------------------------
+L:H{A,B,T,H{C},H{K}}
+EK:{Fkey,L,K}R pkT
+EOO:{Feoo,L,EK}skA
+EOR:{Feor,L,EK}skB
+AT:{Fabt,L}skA
+REC:{Frec,L,EK}skB
+CON:{Fcon,L,AT}skT
+
+Main Protocol
+-------------------------------------------------------------
+A>B:Feoo,A,B,T,C,H{C},EK,EOO
+B>A:Feor,EOR
+A>B:Fkey,K,R
+
+Abort Protocol
+-------------------------------------------------------------
+A>T:Fabt,A,B,T,H{C},H{K},{AT}pkT
+if recoreved then
+	T>A:Feor,L,EOR
+if aborted then
+	T>A:Fcon,L,CON
+else
+	state:aborted
+	issue CON.
+
+Resolve Protocol
+-------------------------------------------------------------
+B>T:Frec,A,B,T,H{C},H{K},EK,EOO,EOR,REC
+if any signature invalid
+	stop
+if aborted then
+	T>B:Fabt,L,AT
+if recovered then
+	T>B:Fkey,L,K,R
+if EK invalid
+	T>B:Ferr
+else
+	state: recovered
+	T>A:Feor,L,EOR
+	T>B:Fkey,L,K,R
+*************************************************************)
+
+
+param attacker=active.
+param traceDisplay=short.
+
+free ch. (*open channel*)
+private free rch. (*resilient channel*)
+
+data Feoo/0. (*Evidence of origin*)
+data Feor/0. (*Evidence of receipt*)
+data Fkey/0. (*Evidence of key*)
+data Fabt/0. (*Abort*)
+data Fres/0. (*Resolve*)
+data Fcon/0. (*Confirm abort*)
+data Ferr/0. (*Error*)
+
+fun host/1. (*host data binding*)
+reduc getKey(host(x))=x.
+
+fun H/1. (*secure hash functions*)
+
+fun encrypt/2. (*symmetric key cryptography*)
+reduc decrypt(encrypt(m,k),k)=m.
+
+fun pk/1. (*asymmetriic key cryptography*)
+fun pkEncrypt/2.
+reduc pkDecrypt(pkEncrypt(m,pk(x)),x)=m.
+
+fun S/2. (*digital signature*)
+reduc checkS(S(m,x),pk(x))=m.
+
+fun randEncrypt/3. (*randomised asymmetric encryption*)
+reduc randDecrypt(randEncrypt(m,pk(x),r),x)=m.
+reduc randRecover(randEncrypt(m,pk(x),r),x)=r. (*randomness recoverability*)
+
+private free skA. (*private keys*)
+private free skB.
+private free skT.
+
+query
+	attacker: skA; (*key secrecy*)
+	attacker: skB;
+	attacker: skT;
+	ev:validEOR(S((Feor,H((A,HOST,T,H(encrypt(msg,K)),H(K))),randEncrypt((Fkey,H((A,HOST,T,H(encrypt(msg,K)),H(K)))),host(pk(skT)),R)),skB))
+	==>ev:sentEOO(S((Feoo,H((A,HOST,T,H(encrypt(msg,K)),H(K))),randEncrypt((Fkey,H((A,HOST,T,H(encrypt(msg,K)),H(K)))),host(pk(skT)),R)),skA)). (*strong fairness*)
+	
+(*Process A*)
+let processA=
+	event begin(A);
+	new K; (*new symmetric encryption key*)
+	new R; (*new random*)
+	new msg; (*new message*)
+	let C=encrypt(msg,K) in
+	let L=H((A,HOST,T,H(C),H(K))) in
+	let EK=randEncrypt((Fkey,L,K),getKey(T),R) in
+	let EOO=S((Feoo,L,EK),skA) in
+	(*A>B:Feoo,A,B,T,C,H{C},EK,EOO*)
+	out(ch,(Feoo,A,HOST,T,C,H(C),EK,EOO));
+	event sentEOO(EOO);
+	(*B>A:Feor,EOR*)
+	in(ch,(=Feor,EOR));
+	let (=Feor,=L,=EK)=checkS(EOR,getKey(HOST)) in(
+		event validEOR(EOR);
+		(*A>B:Fkey,K,R*)
+		out(ch,(Fkey,K,R));
+		event end(A);0
+	)
+	else (
+		(*A>T:Fabt,A,B,T,H{C},H{K},{AT}pkT*)
+		let AT=S((Fabt,L),skA) in
+		out(rch,(A,HOST,T,H(C),H(K),pkEncrypt(AT,getKey(T))));
+		in(rch,(F,=L,EV));
+		if F=Feor then(
+			(*T>A:Feor,L,EOR*)
+			let(=Feor,=L,=EK)=checkS(EV,getKey(HOST)) in
+			event validEOR(EV);
+			event end(A);0
+		)
+		else if F=Fcon then(
+			(*T>A:Fcon,L,CON*)
+			let(=Fcon,=L)=checkS(EV,getKey(T)) in
+			event validAT(EV);
+			event end(A);0
+		)
+		else(
+			(*TTP Error*)
+			event error(A);
+			event end(A);0
+		)
+	).		
+
+(*Process TTP*)
+let processT=
+	event begin(T);
+	in(rch,m);
+	(*A>T:Fabt,A,B,T,H{C},H{K},{AT}pkT*)
+	let (=Fabt,=HOSTA,=HOSTB,=T,HC,HK,AT)=m in(
+		let (=Fabt,L)=checkS(AT,getKey(HOSTA)) in(
+			if H((HOSTA,HOSTB,T,HC,HK))=L then(
+				(*T>A:Fcon,L,{Fcon,L,AT}skT*)
+				let CON=S((Fcon,L,AT),skT) in(
+					out(rch,(Fcon,L,CON));
+					abortedT
+				)
+			)
+			else 
+				event end(T);0
+		)
+		else 
+			event end(T);0
+	)
+	(*B>T:Frec,A,B,T,H{C},H{K},EK,EOO,EOR,REC*)
+	else let (=Fres,HOSTA,HOSTB,=T,HC,HK,EK,EOO,EOR,REC)=m in( 
+		let (=Feoo,L,=EK)=checkS(EOO,getKey(HOSTA)) in( 
+			let (=Feor,=L,=EK)=checkS(EOR,getKey(HOSTB)) in(
+				let (=Fres,=L,=EK)=checkS(REC,getKey(HOSTB)) in(
+					let R = randRecover(EK,skT) in ( 
+						let (=Fkey,=L,K)=randDecrypt(EK,skT) in( 
+							if H(K)=HK then(
+								(*T->B:Fkey,L,K,R*)
+								out(rch,(Fkey,L,K,R));
+								recoveredT
+							)
+							else(
+								(*T->B:Ferr*)
+								out(rch,Ferr); 
+								event end(T)
+							)
+						)
+						else(
+							(*T->B:Ferr*)
+							out(rch,Ferr); 
+							event end(T)
+						)
+					)
+					else 
+						event end(T); 0 
+				)
+				else 
+					event end(T); 0 
+			)
+			else 
+				event end(T);0 
+		)
+		else 
+			event end(T);0
+	)
+	else
+		event falseRequest(T); 
+		event end(T);0. 
+
+(*Process TTP@ state:recovered*)
+let recoveredT=
+	in(rch,m);
+	(*A>T:Fabt,A,B,T,H{C},H{K},{AT}pkT*)
+	let (=Fabt,HOSTA,HOSTB,=T,HC,HK,AT)=m in(
+		let (=Fabt,L)=checkS(AT,getKey(HOSTA)) in(
+			if H((HOSTA,HOSTB,T,HC,HK))=L then(
+				(*T>B:Fkey,L,K,R*)
+				out(rch,(Feor,L,EOR));
+				event end(T);0
+			)
+			else 
+				event end(T);0
+		)
+		else 
+			event end(T);0
+	)
+	(*B>T:Frec,A,B,T,H{C},H{K},EK,EOO,EOR,REC*)
+	else let (=Fres,HOSTA,HOSTB,=T,HC,HK,EK,EOO,EOR,REC)=m in(
+			let (=Feoo,L,=EK)=checkS(EOO,getKey(HOSTA)) in(
+				let (=Feor,=L,=EK)=checkS(EOR,getKey(HOSTB)) in(
+					let (=Fres,=L,=EK)=checkS(REC,getKey(HOSTB)) in(
+						let R = randRecover(EK,skT) in(
+							let (=Fkey,=L,K)=randDecrypt(EK,skT) in(
+								if H(K)=HK then(
+									(*T>B:Fkey,L,K,R*)
+									out(rch,(Fkey,L,K,R));
+									event end(T);0
+								)
+								else(
+									(*T>B:Ferr*)
+									out(rch,Ferr);
+									event end(T);0
+								)
+							)
+							else(
+								(*T>B:Ferr*)
+								out(rch,Ferr);
+								event end(T);0
+							)
+						)
+						else
+							event end(T);0
+					)
+					else 
+						event end(T);0
+				)
+				else
+					event end(T);0
+		)
+		else 
+			event end(T);0
+	)
+	else
+		event falseRequest(T);
+		event end(T);0.
+
+(*Process TTP@ state:aborted*)
+let abortedT=
+	in(rch,m);
+	(*A>T:Fabt,A,B,T,H{C},H{K},{AT}pkT*)
+	let (=Fabt,HOSTA,HOSTB,=T,HC,HK,AT)=m in(
+		let (=Fabt,L)=checkS(AT,getKey(HOSTA)) in(
+			if H((HOSTA,HOSTB,T,HC,HK))=L then(
+				(*T>A:Fcon,L,CON*)
+				out(rch,(Fcon,L,CON));
+				event end(T);0
+			)
+			else 
+				event end(T);0
+		)
+		else 
+			event end(T);0
+	)
+	(*B>T:Frec,A,B,T,H{C},H{K},EK,EOO,EOR,REC*)
+	else let (=Frec,HOSTA,HOSTB,=T,HC,HK,EK,EOO,EOR,REC)=m in(
+		let (=Feoo,L,=EK)=checkS(EOO,getKey(HOSTA)) in(
+			let (=Feor,=L,=EK)=checkS(EOR,getKey(HOSTB)) in(
+				let (=Frec,=L,=EK)=checkS(REC,getKey(HOSTB)) in(
+					let R = randRecover(EK,skT) in(
+						let (=Fkey,=L,K)=randDecrypt(EK,skT) in(
+							if H(K)=HK then(
+								(*T>B:Fabt,L,AT*)
+								out(rch,(Fabt,L,AT));
+								event end(T);0
+							)
+							else(
+								(*T>B:Ferr*)
+								out(rch,Ferr);
+								event end(T);0
+							)
+						)
+						else(
+							(*T>B:Ferr*)
+							out(rch,Ferr);
+							event end(T);0
+						)
+					)
+					else event end(T);0
+				)
+				else event end(T);0
+			)
+			else event end(T);0
+		)
+		else event end(T);0
+	)
+	else
+		event falseRequest(T);
+		event end(T);0.		
+process
+	
+	(*Create and publich public keys*)
+	let pkA=pk(skA) in out(ch,pkA);
+	let pkT=pk(skT) in out(ch,pkT);
+
+	(*Bind public keys to processes*)
+	let A=host(pkA) in out(ch,A);
+	let T=host(pkT) in out(ch,T);
+
+	(*Begin processes*)
+	processA|processT
+

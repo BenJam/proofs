@@ -1,0 +1,53 @@
+(************************************************************
+
+Protocol:
+Version:	
+Created:	
+Last Updated: 
+*************************************************************)
+
+(* Parameters *)
+param traceDisplay=long.
+param attacker=passive.
+
+(* Declaration *)
+free ch.
+data terms/2.
+
+fun host/1.
+reduc get(host(x))=x.
+
+query
+	ev:good(A);
+	ev:good(B);
+	ev:bad(A);
+	ev:bad(B).
+
+let processA=
+	let termsa=(A,B) in
+	out(ch,termsa)|in(ch,termsin);
+	let (=termsin)=termsa in
+		event good(A);
+		0
+	else
+		event bad(A);
+		0.
+
+let processB=
+	let termsb=(A,B) in
+	out(ch,termsb)|in(ch,termsin);
+	let (=termsin)=termsb in
+		event good(B);
+		0
+	else
+		event bad(B);
+		0.
+
+
+(* Process *)
+process
+	new skA;
+	new skB;
+	let A=host(skA) in
+	let B=host(skB) in
+	processA|processB

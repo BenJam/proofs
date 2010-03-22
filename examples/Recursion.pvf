@@ -1,0 +1,23 @@
+param attacker=passive.
+param traceDisplay=long.
+
+free ch.
+free a.
+free b.
+
+query
+	ev:input(b).
+
+let processA =
+	in(ch,m);
+	event input(m);
+	0.
+
+let processC =
+	out(ch,a);
+	out(ch,b);
+	0.
+
+process
+	(!processA)|processC
+	

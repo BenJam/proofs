@@ -1,0 +1,8 @@
+Cryptographic proofs for the two-part Wang and Multi-party Baum-Waidner contract singing protocols. Additionally a number of short, introductory proofs of common cryptographic protocols to aid in learning the syntax of proverif.
+
+Findings are available in my thesis 'Protocol Verification' available from the University of Birmingham, Computer Science Dept.
+
+See the following for more information:
+
+Proverif http://www.proverif.ens.fr/
+

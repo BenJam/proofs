@@ -1,0 +1,35 @@
+(************************************************************
+
+Protocol:
+Version:	
+Created:	
+Last Updated: 
+*************************************************************)
+
+(* Parameters *)
+param traceDisplay=none.
+param attacker=passive.
+
+data null/0.
+data set/2.
+data anotherSet/2.
+
+(* Declaration *)
+reduc getOne(set(x,y))=x.
+reduc getTwo(set(x,y))=y.
+
+query
+	ev: good(x);
+	ev: bad(x).
+
+process
+	new x;
+	new y;
+	let set=(x,y) in
+	let (=x)=getTwo(set) in
+		event good(x);
+		0
+	else
+		event bad(x);
+		0
+

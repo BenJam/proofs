@@ -1,0 +1,31 @@
+(************************************************************
+
+Protocol:
+Version:	
+Created:	
+Last Updated: 
+*************************************************************)
+
+(* Parameters *)
+param displayTrace=long.
+
+(*Channels*)
+free ch.
+
+(* Declaration *)
+fun rand/2
+reduc 	unrand(rand(x,y))=x;
+		unrand(rand(x,y))=y.
+
+private free unsecret.
+private free secret.
+
+(* Query *)
+query attacker:secret.
+
+(* Process *)
+process
+
+	let determine=rand(unsecret,secret) in
+	let =secret = unrand(determine) in
+		out(ch,secret)

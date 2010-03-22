@@ -1,0 +1,47 @@
+(************************************************************
+
+Protocol:	Diffie-Hellman
+Version:
+Created:	
+Last Updated:
+
+*************************************************************)
+
+(* Parameters *)
+
+(* Declaration *)
+
+free c.
+private free s.
+
+(* Diffie Hellman *)
+
+fun f/2.
+fun g/1.
+equation f(x,g(y)) = f(y,g(x)).
+
+(* Encryption *)
+
+fun encrypt/2.
+reduc decrypt(encrypt(x,y),y)=x.
+
+(* Query*)
+
+query attacker: s.
+
+(* Process *)
+
+let p0 = 
+	new n0;
+	out(c,g(n0)) | in (c,x1);
+	let k=f(x1,n0) in
+	out(c,encrypt(s,k)).
+
+let p1 = 
+	new n1;
+	out(c,g(n1)) | in(c,x0);
+	let k=f(x0,n1) in
+	in(c,m);
+	let s2 = decrypt(m,k)in 0.
+
+process p0|p1

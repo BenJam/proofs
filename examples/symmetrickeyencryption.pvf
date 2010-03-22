@@ -1,0 +1,32 @@
+(************************************************************
+
+Protocol: Example						
+Version:	
+Created:	
+Last Updated: 
+*************************************************************)
+
+(* Parameters *)
+param traceDisplay=long.
+
+(* Declaration *)
+free ch.
+private free secret.
+
+fun encrypt/2.
+reduc decrypt(encrypt(m,k),k)=m.
+
+(* Query *)
+query attacker:secret.
+
+(* Process *)
+process
+
+	new key;
+	new message;
+	let cipher = encrypt(message,key) in
+	let (=message) = decrypt(cipher,message) in
+		out(ch,key)
+	else
+		out(ch,secret)
+

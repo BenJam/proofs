@@ -1,0 +1,233 @@
+(************************************************************
+
+Protocol: Simple Contract Exchange Protocol
+Version:	
+Created:	
+Last Updated: 
+*************************************************************)
+free c.
+private free TTPc.
+(************************************************************
+
+Main Protocol:
+
+ A-> B: A,\{promise\}_{skA}  else B quits
+ B-> A: B,\{promise\}_{skB}  else A aborts
+ A-> B: \{contract\}_{skA}  else B resolves
+ B-> A: \{contract\}_{skB}  else A resolves
+
+Abort Protocol:
+ X-> T: X,\{abort(contract)\}_{skX} 
+ T-> X: \{abort(contract)\}_{skT}  if instance is not yet recovered else
+ T-> X: \{contract\}_{skT} 
+
+Recovery:
+ X-> T: X,\{recover(contract),Y,\{promise\}_{skY}\}_{skX} 
+ T-> X: \{contract\}_{skT}  is instance is not yet aborted else
+ T-> X: \{abort\}_{skT} 
+
+*************************************************************)
+
+(* Parameters *)
+param traceDisplay=long.
+param attacker=active.
+
+(* The Contract *)
+free contract.
+
+(*Public Key Crpyto*)
+fun pk/1.
+fun encrypt/2.
+reduc decrpyt(encrypt(m,pk(x)),x)=m.
+
+(* host identification*)
+fun host/1.
+reduc getKey(host(x))=x.
+
+(* Simple Signatures *)
+fun sign/2.
+reduc checkSign(sign(m,x),pk(x))=m.
+
+(* Create a Promise*)
+fun promise/1.
+
+(* Create an Abort Token*)
+fun abort/1.
+
+(*Create a resolve Token*)
+fun resolve/1.
+
+
+(*Private Keys*)
+private free skA.
+private free skB.
+private free skT.
+
+(* Query *)
+query
+	(*Secrecy of keys*)
+	attacker:skA;
+	attacker:skB;
+	attacker:skT;
+	(*Timeliness*)
+	ev:beginA(contract) ==> ev:completeA(contract);
+	ev:beginB(contract) ==> ev:completeB(contract);
+	(*Strong Fairness*)
+	ev:completeA(contract) ==> 
+	(ev:hasSignedContractA(sign(contract,skB))&ev:hasSignedContractB(sign(contract,skA)))|
+	(ev:hasSignedContractA(sign(contract,skT))&ev:hasSignedContractB(sign(contract,skT)))|
+	(ev:abortedA(contract)&ev:abortedB(contract));
+	ev:completeB(contract) ==> 
+	(ev:hasSignedContractA(sign(contract,skB))&ev:hasSignedContractB(sign(contract,skA)))|
+	(ev:hasSignedContractA(sign(contract,skT))&ev:hasSignedContractB(sign(contract,skT)))|
+	(ev:abortedA(contract)&ev:abortedB(contract)).
+
+
+(* Processes *)
+let processA=
+	event beginA(contract);
+	let pA = promise(contract) in 
+	(* A-> B: A,\{promise(contract)\}_{skA} *)
+    out(c,(A,sign(pA,skA)));
+	(* A<- B: B,\{promise(contract)\}_{skB} *)
+	in(c,(host,promiseB));
+	let hostKey=getKey(B) in
+	if promise(contract)=checkSign(promiseB,hostKey) then(
+			(* A-> B: \{contract\}_{skA} *)
+		    out(c,sign(contract,skA));
+			(* A<- B: \{contract\}_{skB} *)
+			in(c,(=host,m));
+			if contract = checkSign(m,hostKey) then(
+				event hasSignedContractA(m)
+			)
+			else(
+				(* A-> T: resolve(contract),A,B,\{resolve(contract),\{promise(contract)\}_{skB}\}_{skA} *)
+				out(TTPc,(resolve(contract),A,B,sign((resolve(contract),promiseB),skA)));
+				in(TTPc,m);
+				let TTPKey = getKey(T) in
+				(* A<- T: \{abort(contract)\}_{skT} *)
+				if abort(contract) = checkSign(m,TTPKey) then (
+					event abortedA(contract);
+					event completeA(contract)
+				)
+				(* A<- T: \{contract\}_{skT} *)
+				else if contract = checkSign(m,TTPKey) then (
+					event hasSignedContractA(m);
+					event completeA(contract)
+				)
+			)			
+	)
+	else (
+		(* \{abort(contract)\}_{skA} *)
+		out(TTPc,sign(abort(contract),skA));
+		in(TTPc,m);
+		let TTPKey = getKey(T) in
+		(* A<- T: \{abort(contract)\}_{skT} *)
+		if abort(contract) = checkSign(m,TTPKey) then (
+			event abortedA(contract);
+			event completeA(contract)
+		)
+		(* A<- T: \{contract\}_{skT} *)
+		else if contract = checkSign(m,TTPKey) then (
+			event hasSignedContractA(m);
+			event completeA(contract)
+		)
+	).
+
+let processB=
+	event beginB(contract);
+	(* B<- A: A,\{promise(contract)\}_{skA} *)
+	in (c,(host,promiseA));
+	let hostKey=getKey(A) in
+	if promise(contract)=checkSign(promiseA,hostKey) then(
+	let pB=promise(contract) in
+		(* B-> A: B,\{promise(contract)\}_{skB} *)
+		out(c,(B,sign(pB,skB)));	
+		in(c,(=host,m));
+		(* B<- A: \{contract\}_{skA} *)
+		if contract = checkSign(m,hostKey) then( 
+			event hasSignedContractB(m);
+			event completeB(contract);
+			(* B-> A: \{contract\}_{skB} *)
+			out(c,sign(contract,skB))
+		)
+		else(
+			(* B-> T: resolve(contract),B,A,\{resolve(contract),\{promise(contract)\}_{skA}\}_{skB} *)
+			out(TTPc,(resolve(contract),B,A,sign((resolve(contract),promiseA),skB)));
+			in(TTPc,m);
+			let TTPKey = getKey(T) in
+			(* B<- T: \{abort(contract)\}_{skT} *)
+			if abort(contract) = checkSign(m,TTPKey) then (
+				event abortedB(contract);
+				event completeB(contract)
+			)
+			(* B<- T: \{contract\}_{skT} *)
+			else if contract = checkSign(m,TTPKey) then (
+				event hasSignedContractB(m);
+				event completeB(contract)
+			)
+
+		)		
+	)
+	(*B quits*)
+	else event completeB(contract). 
+
+let processT=
+	in(TTPc,(host,m));
+	if host=A then (
+		let hostKey = getKey(A) in
+		(* T<- A: \{abort(contract)\}_{skA} *)
+		if abort(contract) = checkSign(m,hostKey) then (
+			out(TTPc,sign(abort(contract),skT));
+			processTAbort
+		)
+		(* T<- A: resolve(contract),A,B,\{resolve(contract),\{promise(contract)\}_{skB}\}_{skA} *)
+		else let (=resolve(contract),host,hostPromise) = checkSign(m,hostKey) in(
+			let promiseKey = getKey(host) in
+			if promise(contract) = checkSign(hostPromise,hostKey) then(
+				out(TTPc,sign(contract,skT));
+				processTResolve
+			)else 0
+		)
+	)else if host=B then (
+		let hostKey = getKey(B) in
+		(* T<- B: \{abort(contract)\}_{skB} *)
+		if abort(contract) = checkSign(m,hostKey) then (
+			out(TTPc,sign(abort(contract),skT));
+			processTAbort
+		)
+		(* T<- B: resolve(contract),B,A,\{resolve(contract),\{promise(contract)\}_{skA}\}_{skB} *)
+		else let (=resolve(contract),host,hostPromise) = checkSign(m,hostKey) in(
+			let promiseKey = getKey(host) in
+			if promise(contract) = checkSign(hostPromise,hostKey) then(
+				out(TTPc,sign(contract,skT));
+				processTResolve
+			)
+		)else 0
+	) else 0.
+		
+
+let processTAbort=
+	in(TTPc,m);
+	(*always output a signed abort token*)
+	out(TTPc,sign(abort(contract),skT)).
+
+let processTResolve=
+	in(TTPc,m);
+	(*always output a signed contract*)
+	out(TTPc,sign(contract,skT)).
+
+process
+	(* Output public keys on channel *)
+	let pkA=pk(skA) in out(c,pkA);
+	let pkB=pk(skB) in out(c,pkB);
+	let pkT=pk(skT) in out(c,pkT);
+
+	(* Output host identifiers on channel *)
+	let A=host(pkA) in out(c,A);
+	let B=host(pkB) in out(c,B);
+	let T=host(pkT) in out(c,T);
+
+	(* Begin the Exchange *)
+	processA|processB|processT	
+	
